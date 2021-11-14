@@ -81,6 +81,14 @@ impl<'a> DnsSocket<'a> {
         }
     }
 
+    /// Update the managed slice with servers
+    pub fn update_servers(&mut self, servers: &[IpAddress]) {
+        self.servers
+            .iter_mut()
+            .zip(servers.iter())
+            .for_each(|(a, b)| *a = *b);
+    }
+
     /// Return the socket handle.
     #[inline]
     pub fn handle(&self) -> SocketHandle {
@@ -332,7 +340,7 @@ impl<'a> DnsSocket<'a> {
                     dst_addr: self.servers[0],
                     protocol: IpProtocol::Udp,
                     payload_len: udp_repr.header_len() + payload.len(),
-                    hop_limit: hop_limit,
+                    hop_limit,
                 };
 
                 net_trace!(
