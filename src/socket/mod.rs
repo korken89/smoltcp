@@ -58,7 +58,7 @@ pub use self::tcp::{SocketBuffer as TcpSocketBuffer, State as TcpState, TcpSocke
 pub use self::dhcpv4::{Config as Dhcpv4Config, Dhcpv4Socket, Event as Dhcpv4Event};
 
 #[cfg(feature = "socket-dns")]
-pub use self::dns::{DnsQuery, DnsSocket};
+pub use self::dns::{DnsQuery, DnsSocket, QueryHandle as DnsQueryHandle};
 pub use self::set::{Handle as SocketHandle, Item as SocketSetItem, Set as SocketSet};
 pub use self::set::{Iter as SocketSetIter, IterMut as SocketSetIterMut};
 
