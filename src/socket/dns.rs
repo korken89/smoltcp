@@ -11,8 +11,9 @@ use crate::{rand, Error, Result};
 const DNS_PORT: u16 = 53;
 const MAX_NAME_LEN: usize = 255;
 const MAX_ADDRESS_COUNT: usize = 4;
-const RETRANSMIT_DELAY: Duration = Duration::from_millis(1000);
-const MAX_RETRANSMIT_DELAY: Duration = Duration::from_millis(10000);
+const RETRANSMIT_DELAY: Duration = Duration::from_millis(1_000);
+const MAX_RETRANSMIT_DELAY: Duration = Duration::from_millis(10_000);
+const RETRANSMIT_TIMEOUT: Duration = Duration::from_millis(10_000); // Should generally be 2-10 secs
 
 /// State for an in-progress DNS query.
 ///
@@ -28,6 +29,7 @@ pub struct DnsQuery {
 enum State {
     Pending(PendingQuery),
     Completed(CompletedQuery),
+    Failure,
 }
 
 #[derive(Debug)]
@@ -38,8 +40,11 @@ struct PendingQuery {
     port: u16, // UDP port (src for request, dst for response)
     txid: u16, // transaction ID
 
+    timeout_at: Option<Instant>,
     retransmit_at: Instant,
     delay: Duration,
+
+    server_idx: usize,
 }
 
 #[derive(Debug)]
@@ -156,7 +161,9 @@ impl<'a> DnsSocket<'a> {
                 txid: rand::rand_u16(),
                 port: rand::rand_source_port(),
                 delay: RETRANSMIT_DELAY,
+                timeout_at: None,
                 retransmit_at: Instant::ZERO,
+                server_idx: 0,
             }),
         });
         Ok(handle)
@@ -176,6 +183,10 @@ impl<'a> DnsSocket<'a> {
                 let res = q.addresses.clone();
                 *slot = None; // Free up the slot for recycling.
                 Ok(res)
+            }
+            State::Failure => {
+                *slot = None; // Free up the slot for recycling.
+                Err(Error::Unaddressable)
             }
         }
     }
@@ -318,6 +329,35 @@ impl<'a> DnsSocket<'a> {
 
         for q in self.queries.iter_mut().flatten() {
             if let State::Pending(pq) = &mut q.state {
+                let timeout = if let Some(timeout) = pq.timeout_at {
+                    timeout
+                } else {
+                    let v = cx.now + RETRANSMIT_TIMEOUT;
+                    pq.timeout_at = Some(v);
+                    v
+                };
+
+                // Check timeout
+                if timeout < cx.now {
+                    pq.server_idx += 1;
+                    if pq.server_idx < self.servers.len() {
+                        // DNS timeout
+                        pq.timeout_at = Some(cx.now + RETRANSMIT_TIMEOUT);
+                        pq.retransmit_at = Instant::ZERO;
+                        pq.delay = RETRANSMIT_DELAY;
+                    } else {
+                        // Query failure
+                        q.state = State::Failure;
+                        continue;
+                    }
+                }
+
+                // Check so the IP address is valid
+                if self.servers[pq.server_idx].is_unspecified() {
+                    q.state = State::Failure;
+                    continue;
+                }
+
                 if pq.retransmit_at > cx.now {
                     // query is waiting for retransmit
                     continue;
@@ -343,7 +383,7 @@ impl<'a> DnsSocket<'a> {
                 };
                 let ip_repr = IpRepr::Unspecified {
                     src_addr: IpAddress::Unspecified,
-                    dst_addr: self.servers[0],
+                    dst_addr: self.servers[pq.server_idx],
                     protocol: IpProtocol::Udp,
                     payload_len: udp_repr.header_len() + payload.len(),
                     hop_limit,
@@ -380,6 +420,7 @@ impl<'a> DnsSocket<'a> {
             .filter_map(|q| match &q.state {
                 State::Pending(pq) => Some(PollAt::Time(pq.retransmit_at)),
                 State::Completed(_) => None,
+                State::Failure => None,
             })
             .min()
             .unwrap_or(PollAt::Ingress)
