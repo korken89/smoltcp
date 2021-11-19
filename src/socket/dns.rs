@@ -259,6 +259,7 @@ impl<'a> DnsSocket<'a> {
                     net_trace!("{}: question type mismatch", self.meta.handle);
                     return Err(Error::Malformed);
                 }
+
                 if !eq_names(p.parse_name(question.name), p.parse_name(&pq.name))? {
                     net_trace!("{}: question name mismatch", self.meta.handle);
                     return Err(Error::Malformed);
@@ -309,7 +310,10 @@ impl<'a> DnsSocket<'a> {
 
                 if !addresses.is_empty() {
                     q.state = State::Completed(CompletedQuery { addresses })
+                } else {
+                    q.state = State::Failure;
                 }
+
                 // If we get here, packet matched the current query, stop processing.
                 return Ok(());
             }
